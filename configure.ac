@@ -53,22 +53,18 @@ PKG_PROG_PKG_CONFIG([0.24])
 
 # minimal required versions
 LIBGLIB_REQUIRED=2.32.0
-LIBGTK_REQUIRED=3.18.0
+LIBGTK_REQUIRED=4.0.0
 LIBCANBERRAGTK_OPTIONAL=0.26
 
 # Check for dependencies
 PKG_CHECK_MODULES([glib],[glib-2.0 >= $LIBGLIB_REQUIRED])
-PKG_CHECK_MODULES([gtk],[gtk+-3.0 >= $LIBGTK_REQUIRED])
+PKG_CHECK_MODULES([gtk],[gtk4 >= $LIBGTK_REQUIRED])
 
 AC_PATH_PROG(GLIB_COMPILE_SCHEMAS, glib-compile-schemas)
 
 GLIB_GSETTINGS
 
-AC_CHECK_LIB([popt], [poptGetContext], [],
-	[AC_MSG_FAILURE([No library 'libpopt' found])]
-)
-
-PKG_CHECK_MODULES([libcanberra], [libcanberra-gtk3 >= $LIBCANBERRAGTK_OPTIONAL], have_canberragtk=yes, have_canberragtk=no)
+PKG_CHECK_MODULES([libcanberra], [libcanberra >= $LIBCANBERRAGTK_OPTIONAL], have_canberragtk=yes, have_canberragtk=no)
 AS_IF([test "x$have_canberragtk" = "xyes"],
 	AC_DEFINE([HAVE_CANBERRAGTK],[1],[Define this to enable sound support.])
 )

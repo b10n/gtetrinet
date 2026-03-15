@@ -45,12 +45,10 @@ GtkWidget *winlist_page_new (void)
 
     /* Load the icons and scale them */
     pixbuf = gdk_pixbuf_new_from_file (GTETPIXMAPSDIR "/team.png",  NULL);
-    team_icon = gdk_pixbuf_scale_simple (pixbuf, 24, 24, GDK_INTERP_BILINEAR);
-    g_object_unref (pixbuf);
-    
+    if (pixbuf) { team_icon  = gdk_pixbuf_scale_simple (pixbuf, 24, 24, GDK_INTERP_BILINEAR); g_object_unref (pixbuf); }
+
     pixbuf = gdk_pixbuf_new_from_file (GTETPIXMAPSDIR "/alone.png", NULL);
-    alone_icon = gdk_pixbuf_scale_simple (pixbuf, 24, 24, GDK_INTERP_BILINEAR);
-    g_object_unref (pixbuf);
+    if (pixbuf) { alone_icon = gdk_pixbuf_scale_simple (pixbuf, 24, 24, GDK_INTERP_BILINEAR); g_object_unref (pixbuf); }
 
     builder = gtk_builder_new_from_resource("/apps/gtetrinet/winlist.ui");
     winlist = GTK_WIDGET (gtk_builder_get_object(builder, "winlist"));

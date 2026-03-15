@@ -37,6 +37,7 @@
 #include "tetris.h"
 #include "fields.h"
 #include "partyline.h"
+#include "dialogs.h"
 
 char blocksfile[1024];
 int bsize;
@@ -154,8 +155,8 @@ void config_loadtheme (const gchar *themedir)
                                    GTK_BUTTONS_OK,
                                    _("Warning: theme does not have a name, "
                                      "reverting to default."));
-      gtk_dialog_run (GTK_DIALOG (mb));
-      gtk_widget_destroy (mb);
+      dialog_run (GTK_DIALOG (mb));
+      gtk_window_destroy (GTK_WINDOW (mb));
       g_key_file_unref (keyfile);
       g_string_assign(currenttheme, DEFAULTTHEME);
       config_loadtheme (currenttheme->str);

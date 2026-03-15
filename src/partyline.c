@@ -51,7 +51,7 @@ int plh_start = 0, plh_end = 0, plh_cur = 0;
 
 /* function prototypes for callbacks */
 static void textentry (GtkWidget *widget);
-static gint entrykey (GtkWidget *widget, GdkEventKey *key);
+static gboolean entrykey (GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void channel_activated (GtkTreeView *treeview);
 
 GtkWidget *partyline_page_new (void)
@@ -70,8 +70,11 @@ GtkWidget *partyline_page_new (void)
     entrybox = GTK_WIDGET (gtk_builder_get_object(builder, "entrybox"));
     g_signal_connect (G_OBJECT(entrybox), "activate",
                       G_CALLBACK(textentry), NULL);
-    g_signal_connect (G_OBJECT(entrybox), "key-press-event",
-                      G_CALLBACK(entrykey), NULL);
+    {
+        GtkEventControllerKey *ctrl = (GtkEventControllerKey *)gtk_event_controller_key_new ();
+        g_signal_connect (ctrl, "key-pressed", G_CALLBACK(entrykey), NULL);
+        gtk_widget_add_controller (entrybox, GTK_EVENT_CONTROLLER(ctrl));
+    }
     infolabel = GTK_WIDGET (gtk_builder_get_object(builder, "infolabel"));
     textbox = GTK_WIDGET (gtk_builder_get_object(builder, "textbox"));
     textboxlabel = GTK_WIDGET (gtk_builder_get_object(builder, "textboxlabel"));
@@ -188,7 +191,7 @@ void partyline_entryfocus (void)
 {
     if (connected)
     {
-      gtk_entry_set_text (GTK_ENTRY (entrybox), "");
+      gtk_editable_set_text (GTK_EDITABLE (entrybox), "");
       gtk_editable_set_position (GTK_EDITABLE (entrybox), 0);
       gtk_widget_grab_focus (entrybox);
     }
@@ -197,21 +200,21 @@ void partyline_entryfocus (void)
 void textentry (GtkWidget *widget)
 {
     const char *text;
-    text = gtk_entry_get_text (GTK_ENTRY(widget));
+    text = gtk_editable_get_text (GTK_EDITABLE(widget));
 
     if (strlen(text) == 0) return;
 
     if (g_str_has_prefix(text, "/list"))
       stop_list(); /* Parsing can't be perfect,
                       so make sure they can do it by hand... */
-    
+
     // Show the command if it's a /msg
     if (g_str_has_prefix (text, "/msg"))
       partyline_text (text);
-    
+
     tetrinet_playerline (text);
     GTET_O_STRCPY (plhistory[plh_end], text);
-    gtk_entry_set_text (GTK_ENTRY(widget), "");
+    gtk_editable_set_text (GTK_EDITABLE(widget), "");
 
     plh_end ++;
     if (plh_end == PLHSIZE) plh_end = 0;
@@ -234,7 +237,7 @@ static gboolean is_nick (GtkTreeModel *model,
   if (g_str_has_prefix (down, data))
   {
     aux = g_strconcat (nick, ": ", NULL);
-    gtk_entry_set_text (GTK_ENTRY (entrybox), aux);
+    gtk_editable_set_text (GTK_EDITABLE (entrybox), aux);
     gtk_editable_set_position (GTK_EDITABLE (entrybox), -1);
 
     g_free (aux);
@@ -255,7 +258,7 @@ static void playerlist_complete_nick (void)
   GtkListStore *playerlist_model = GTK_LIST_STORE (gtk_tree_view_get_model (GTK_TREE_VIEW (playerlist)));
   gchar *text;
 
-  text = g_utf8_strdown (gtk_entry_get_text (GTK_ENTRY (entrybox)), -1);
+  text = g_utf8_strdown (gtk_editable_get_text (GTK_EDITABLE (entrybox)), -1);
   if (text == NULL) return;
 
   gtk_tree_model_foreach (GTK_TREE_MODEL (playerlist_model), is_nick, text);
@@ -263,14 +266,16 @@ static void playerlist_complete_nick (void)
   g_free (text);
 }
 
-static gint entrykey (GtkWidget *widget, GdkEventKey *key)
+static gboolean entrykey (GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data)
 {
-    int keyval = key->keyval;
+    GtkWidget *widget = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER(ctrl));
     gchar *text = NULL;
+
+    (void)keycode; (void)state; (void)user_data;
 
     if (keyval == GDK_KEY_Up || keyval == GDK_KEY_Down) {
         if (plh_cur == plh_end) {
-            GTET_O_STRCPY (plhistory[plh_end], gtk_entry_get_text(GTK_ENTRY(widget)));
+            GTET_O_STRCPY (plhistory[plh_end], gtk_editable_get_text(GTK_EDITABLE(widget)));
         }
         switch (keyval) {
         case GDK_KEY_Up:
@@ -284,14 +289,13 @@ static gint entrykey (GtkWidget *widget, GdkEventKey *key)
             if (plh_cur == PLHSIZE) plh_cur = 0;
             break;
         }
-        text = plhistory[plh_cur]; 
-        gtk_entry_set_text (GTK_ENTRY(widget), text);
+        text = plhistory[plh_cur];
+        gtk_editable_set_text (GTK_EDITABLE(widget), text);
         gtk_editable_set_position (GTK_EDITABLE (widget), -1);
 #ifdef DEBUG
         printf ("history: %d %d %d %s\n", plh_start, plh_end, plh_cur,
                 plhistory[plh_cur]);
 #endif
-        g_signal_stop_emission_by_name (G_OBJECT(widget), "key-press-event");
         return TRUE;
     }
     else if (keyval == GDK_KEY_Left || keyval == GDK_KEY_Right) {

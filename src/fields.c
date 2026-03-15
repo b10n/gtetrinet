@@ -25,7 +25,6 @@
 #include <glib/gi18n.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <cairo-gobject.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
 #include "gtet_config.h"
@@ -35,6 +34,7 @@
 #include "fields.h"
 #include "misc.h"
 #include "gtetrinet.h"
+#include "dialogs.h"
 #include "string.h"
 
 #define BLOCKSIZE bsize
@@ -47,9 +47,9 @@ static GtkBuilder *fieldbuilders[6];
 
 static GtkWidget *fields_page_contents (void);
 
-static gint fields_expose_event (GtkWidget *widget, GdkEventExpose *event, gpointer field);
-static gint fields_nextpiece_expose (GtkWidget *widget);
-static gint fields_specials_expose (GtkWidget *widget);
+static void fields_draw_field (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer field);
+static void fields_draw_nextpiece (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data);
+static void fields_draw_specials (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data);
 
 static void fields_refreshfield (int field);
 static void fields_drawblock (int field, int x, int y, char block);
@@ -57,6 +57,11 @@ static void fields_drawblock (int field, int x, int y, char block);
 static void gmsginput_activate (void);
 
 static cairo_surface_t *blockpix;
+
+/* Per-widget off-screen backing surfaces */
+static cairo_surface_t *field_surfaces[6];
+static cairo_surface_t *nextpiece_surface;
+static cairo_surface_t *specials_surface;
 
 static GdkCursor *invisible_cursor, *arrow_cursor;
 
@@ -68,8 +73,7 @@ void fields_init (void)
     GtkWidget *mb;
     GdkPixbuf *pb = NULL;
     GError *err = NULL;
-    cairo_surface_t *mask = NULL;
-    
+
     if (!(pb = gdk_pixbuf_new_from_file(blocksfile, &err))) {
         mb = gtk_message_dialog_new (NULL,
                                      GTK_DIALOG_MODAL,
@@ -77,8 +81,8 @@ void fields_init (void)
                                      GTK_BUTTONS_OK,
                                      _("Error loading theme: cannot load graphics file\n"
                                        "Falling back to default"));
-        gtk_dialog_run (GTK_DIALOG (mb));
-        gtk_widget_destroy (mb);
+        dialog_run (GTK_DIALOG (mb));
+        gtk_window_destroy (GTK_WINDOW (mb));
 	g_string_assign(currenttheme, DEFAULTTHEME);
         config_loadtheme (DEFAULTTHEME);
         err = NULL;
@@ -90,18 +94,25 @@ void fields_init (void)
         }
     }
 
-    blockpix = cairo_image_surface_create (CAIRO_FORMAT_RGB24, gdk_pixbuf_get_width (pb), gdk_pixbuf_get_height (pb));
-    cairo_t *cr = cairo_create (blockpix);
-    gdk_cairo_set_source_pixbuf (cr, pb, 0, 0);
-    cairo_paint (cr);
-    cairo_destroy (cr);
+    blockpix = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+                                           gdk_pixbuf_get_width (pb),
+                                           gdk_pixbuf_get_height (pb));
+    {
+        cairo_t *cr = cairo_create (blockpix);
+        gdk_cairo_set_source_pixbuf (cr, pb, 0, 0);
+        cairo_paint (cr);
+        cairo_destroy (cr);
+    }
 }
 
 void fields_cleanup (void)
 {
-  if(G_IS_OBJECT (blockpix)) {
-    g_object_unref(blockpix);
-  }
+    if (blockpix) {
+        cairo_surface_destroy (blockpix);
+        blockpix = NULL;
+    }
+    if (invisible_cursor) { g_object_unref (invisible_cursor); invisible_cursor = NULL; }
+    if (arrow_cursor) { g_object_unref (arrow_cursor); arrow_cursor = NULL; }
 }
 
 /* a mess of functions here for creating the fields page */
@@ -111,15 +122,17 @@ GtkWidget *fields_page_new (void)
     pagecontents = fields_page_contents ();
 
     if (fieldspage == NULL) {
-        fieldspage = gtk_alignment_new (0.5, 0.5, 1.0, 1.0);
-        gtk_container_set_border_width (GTK_CONTAINER(fieldspage), 2);
+        fieldspage = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+        gtk_widget_set_margin_start (fieldspage, 2);
+        gtk_widget_set_margin_end (fieldspage, 2);
+        gtk_widget_set_margin_top (fieldspage, 2);
+        gtk_widget_set_margin_bottom (fieldspage, 2);
     }
-    gtk_container_add (GTK_CONTAINER(fieldspage), pagecontents);
+    gtk_box_append (GTK_BOX (fieldspage), pagecontents);
 
     /* create the cursors */
-    //bitmap = gdk_bitmap_create_from_data (gtk_widget_get_window(GTK_WIDGET (fieldspage)), "\0", 1, 1);
-    //invisible_cursor = gdk_cursor_new_from_pixmap (bitmap, bitmap, &black, &black, 0, 0);
-    //arrow_cursor = gdk_cursor_new (GDK_X_CURSOR);
+    invisible_cursor = gdk_cursor_new_from_name ("none", NULL);
+    arrow_cursor = gdk_cursor_new_from_name ("default", NULL);
 
     return fieldspage;
 }
@@ -127,15 +140,20 @@ GtkWidget *fields_page_new (void)
 void fields_page_destroy_contents (void)
 {
     if (pagecontents) {
-        gtk_widget_destroy (pagecontents);
+        int i;
+        gtk_box_remove (GTK_BOX (fieldspage), pagecontents);
         pagecontents = NULL;
+        for (i = 0; i < 6; i++) {
+            if (field_surfaces[i]) { cairo_surface_destroy (field_surfaces[i]); field_surfaces[i] = NULL; }
+        }
+        if (nextpiece_surface) { cairo_surface_destroy (nextpiece_surface); nextpiece_surface = NULL; }
+        if (specials_surface) { cairo_surface_destroy (specials_surface); specials_surface = NULL; }
     }
 }
 
 GtkWidget *fields_page_contents (void)
 {
-    GtkBuilder *fieldsbuilder, *fieldbuilder;
-    GtkWidget *some_widget;
+    GtkBuilder *fieldsbuilder;
 
     fieldsbuilder = gtk_builder_new_from_resource("/apps/gtetrinet/fields.ui");
 
@@ -144,17 +162,13 @@ GtkWidget *fields_page_contents (void)
         int playernb;
         int blocksize;
         gchar playernbstr[2]; // supports up to (9+1) players ;)
-        //float valign;
         GtkBuilder *fieldbuilder;
         GtkWidget *fieldparent, *fieldwidget;
 
         for (playernb = 0; playernb < 6; playernb ++) {
             if (playernb == 0) blocksize = BLOCKSIZE;
             else blocksize = SMALLBLOCKSIZE;
-            /*
-            if (playernb < 4) valign = 0.0;
-            else valign = 1.0;
-            */
+
             /* make the widgets */
             fieldbuilder = gtk_builder_new_from_resource("/apps/gtetrinet/field.ui");
             fieldbuilders[playernb] = fieldbuilder;
@@ -162,43 +176,49 @@ GtkWidget *fields_page_contents (void)
             fields_setlabel (playernb, NULL, NULL, 0);
 
             fieldwidget = GTK_WIDGET(gtk_builder_get_object(fieldbuilder, "field"));
-            /* attach the signals */
-            g_signal_connect (G_OBJECT(fieldwidget), "draw",
-                                G_CALLBACK(fields_expose_event), GINT_TO_POINTER(playernb));
-            gtk_widget_set_events (fieldwidget, GDK_EXPOSURE_MASK);
+            /* set the draw function */
+            gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA(fieldwidget),
+                                            fields_draw_field,
+                                            GINT_TO_POINTER(playernb), NULL);
             /* set the size */
             gtk_widget_set_size_request (fieldwidget,
                                          blocksize * FIELDWIDTH,
                                          blocksize * FIELDHEIGHT);
 
-            /* align it */
-            /*
-            align = gtk_alignment_new (0.5, valign, 0.0, 0.0);
-            gtk_container_add (GTK_CONTAINER(align), gtk_builder_get_object(fieldbuilder, "fieldparent"));
-            gtk_table_attach (GTK_TABLE(table), align,
-                              p[i][0], p[i][1], p[i][2], p[i][3],
-                              GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND,
-                              0, 0);
-            */
+            /* create backing surface and paint initial background */
+            if (field_surfaces[playernb]) cairo_surface_destroy (field_surfaces[playernb]);
+            field_surfaces[playernb] = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+                                                                    blocksize * FIELDWIDTH,
+                                                                    blocksize * FIELDHEIGHT);
+            if (blockpix) fields_refreshfield (playernb);
+
             fieldparent = GTK_WIDGET(gtk_builder_get_object(fieldbuilder, "fieldparent"));
             if (playernb == 0) {
-                gtk_container_add(GTK_CONTAINER(gtk_builder_get_object(fieldsbuilder, "own_field")), fieldparent);
+                gtk_box_append (GTK_BOX (gtk_builder_get_object (fieldsbuilder, "own_field")), fieldparent);
             } else {
-                g_snprintf(playernbstr, sizeof(playernbstr), "%d", playernb);
-                gtk_container_add(GTK_CONTAINER(gtk_builder_get_object(fieldsbuilder, g_strconcat("field",playernbstr,NULL))), fieldparent);
+                gchar *fieldname;
+                g_snprintf (playernbstr, sizeof(playernbstr), "%d", playernb);
+                fieldname = g_strconcat ("field", playernbstr, NULL);
+                gtk_box_append (GTK_BOX (gtk_builder_get_object (fieldsbuilder, fieldname)), fieldparent);
+                g_free (fieldname);
             }
-            /*
-             * else gtk_flow_box_insert(GTK_FLOW_BOX(gtk_builder_get_object(fieldsbuilder, "other_fields")), fieldparent, -1);
-             * We don't use a flow box here, because the layout for the first other field is the different to the others
-             */
         }
     }
 
     /* next block thingy */
     nextpiecewidget = GTK_WIDGET(gtk_builder_get_object(fieldsbuilder, "next_block"));
-    g_signal_connect (G_OBJECT(nextpiecewidget), "draw",
-                        G_CALLBACK(fields_nextpiece_expose), NULL);
+    gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA(nextpiecewidget),
+                                    fields_draw_nextpiece, NULL, NULL);
     gtk_widget_set_size_request (nextpiecewidget, BLOCKSIZE*9/2, BLOCKSIZE*9/2);
+    if (nextpiece_surface) cairo_surface_destroy (nextpiece_surface);
+    nextpiece_surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+                                                    BLOCKSIZE*9/2, BLOCKSIZE*9/2);
+    {
+        cairo_t *cr = cairo_create (nextpiece_surface);
+        cairo_set_source_rgb (cr, 0, 0, 0);
+        cairo_paint (cr);
+        cairo_destroy (cr);
+    }
 
     /* lines, levels and stuff */
     activelabel = GTK_WIDGET(gtk_builder_get_object(fieldsbuilder, "activelevel_label"));
@@ -211,10 +231,18 @@ GtkWidget *fields_page_contents (void)
     speciallabel = GTK_WIDGET(gtk_builder_get_object(fieldsbuilder, "specials_label"));
     specialwidget = GTK_WIDGET(gtk_builder_get_object(fieldsbuilder, "specials"));
     fields_setspeciallabel (NULL);
-    g_signal_connect (G_OBJECT(specialwidget), "draw",
-                        G_CALLBACK(fields_specials_expose), NULL);
+    gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA(specialwidget),
+                                    fields_draw_specials, NULL, NULL);
     gtk_widget_set_size_request (specialwidget, BLOCKSIZE*18, BLOCKSIZE);
-//    gtk_widget_set_size_request (speciallabel, BLOCKSIZE*6, -1);
+    if (specials_surface) cairo_surface_destroy (specials_surface);
+    specials_surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+                                                   BLOCKSIZE*18, BLOCKSIZE);
+    {
+        cairo_t *cr = cairo_create (specials_surface);
+        cairo_set_source_rgb (cr, 0, 0, 0);
+        cairo_paint (cr);
+        cairo_destroy (cr);
+    }
 
     /* attacks and defenses */
     attdefwidget = GTK_WIDGET(gtk_builder_get_object(fieldsbuilder, "att_and_def"));
@@ -238,18 +266,34 @@ GtkWidget *fields_page_contents (void)
 }
 
 
-gint fields_expose_event (GtkWidget *widget, GdkEventExpose *event, gpointer field)
+static void fields_draw_field (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data)
 {
-    widget = widget;
-    event = event;
-    fields_refreshfield (GPOINTER_TO_INT (field));
-    /* hide the cursor */
-    if (ingame)
-      gdk_window_set_cursor (gtk_widget_get_window(widget), invisible_cursor);
-    else
-      gdk_window_set_cursor (gtk_widget_get_window(widget), arrow_cursor);
+    int field = GPOINTER_TO_INT (data);
+    if (!field_surfaces[field])
+        fields_refreshfield (field);
+    if (field_surfaces[field]) {
+        cairo_set_source_surface (cr, field_surfaces[field], 0, 0);
+        cairo_paint (cr);
+    }
+    gtk_widget_set_cursor (GTK_WIDGET(area), ingame ? invisible_cursor : arrow_cursor);
+}
 
-    return FALSE;
+static void fields_draw_nextpiece (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data)
+{
+    if (nextpiece_surface) {
+        cairo_set_source_surface (cr, nextpiece_surface, 0, 0);
+        cairo_paint (cr);
+    }
+    gtk_widget_set_cursor (GTK_WIDGET(area), ingame ? invisible_cursor : arrow_cursor);
+}
+
+static void fields_draw_specials (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data)
+{
+    if (specials_surface) {
+        cairo_set_source_surface (cr, specials_surface, 0, 0);
+        cairo_paint (cr);
+    }
+    gtk_widget_set_cursor (GTK_WIDGET(area), ingame ? invisible_cursor : arrow_cursor);
 }
 
 void fields_refreshfield (int field)
@@ -273,11 +317,29 @@ void fields_drawfield (int field, FIELD newfield)
 
 void drawpix(GtkWidget *widget, int srcx, int srcy, int destx, int desty, int width, int height)
 {
-    cairo_t *cr = gdk_cairo_create (gtk_widget_get_window(widget));
-    cairo_set_source_surface (cr, blockpix, -srcx+destx, -srcy+desty); // move big image, so the block we need is in the right position on cr
-    cairo_rectangle (cr, destx, desty, width, height); // only draw the block we need
-    cairo_fill(cr);
+    cairo_surface_t *surface = NULL;
+    cairo_t *cr;
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        if (fieldbuilders[i] &&
+            GTK_WIDGET(gtk_builder_get_object(fieldbuilders[i], "field")) == widget) {
+            surface = field_surfaces[i];
+            break;
+        }
+    }
+    if (!surface) {
+        if (widget == nextpiecewidget) surface = nextpiece_surface;
+        else if (widget == specialwidget) surface = specials_surface;
+    }
+    if (!surface || !blockpix) return;
+
+    cr = cairo_create (surface);
+    cairo_set_source_surface (cr, blockpix, (double)(destx - srcx), (double)(desty - srcy));
+    cairo_rectangle (cr, destx, desty, width, height);
+    cairo_fill (cr);
     cairo_destroy (cr);
+    gtk_widget_queue_draw (widget);
 }
 
 void fields_drawblock (int field, int x, int y, char block)
@@ -309,10 +371,6 @@ void fields_drawblock (int field, int x, int y, char block)
     destx = blocksize * x;
     desty = blocksize * y;
 
-/*    gdk_draw_drawable (fieldwidgets[field]->window,
-                       fieldwidgets[field]->style->black_gc,
-                       blockpix, srcx, srcy, destx, desty,
-                       blocksize, blocksize);*/
     drawpix(GTK_WIDGET(gtk_builder_get_object(fieldbuilders[field], "field")), srcx, srcy, destx, desty, blocksize, blocksize);
 }
 
@@ -322,7 +380,7 @@ void fields_setlabel (int field, char *name, char *team, int num)
     GtkBuilder *fieldbuilder = fieldbuilders[field];
 
     g_snprintf (buf, sizeof(buf), "%d", num);
-    
+
     if (name == NULL) {
         gtk_widget_hide (GTK_WIDGET(gtk_builder_get_object(fieldbuilder,"fieldnumber")));
         gtk_widget_hide (GTK_WIDGET(gtk_builder_get_object(fieldbuilder,"fieldnumber_separator")));
@@ -366,46 +424,23 @@ void fields_setspeciallabel (char *label)
     }
 }
 
-gint fields_nextpiece_expose (GtkWidget *widget)
-{
-    fields_drawnextblock (NULL);
-    if (ingame)
-      gdk_window_set_cursor (gtk_widget_get_window(widget), invisible_cursor);
-    else
-      gdk_window_set_cursor (gtk_widget_get_window(widget), arrow_cursor);
-    return FALSE;
-}
-
-gint fields_specials_expose (GtkWidget *widget)
-{
-    fields_drawspecials ();
-    if (ingame)
-      gdk_window_set_cursor (gtk_widget_get_window(widget), invisible_cursor);
-    else
-      gdk_window_set_cursor (gtk_widget_get_window(widget), arrow_cursor);
-    return FALSE;
-}
-
 void fields_drawspecials (void)
 {
     int i;
     for (i = 0; i < 18; i ++) {
         if (i < specialblocknum) {
-/*            gdk_draw_drawable (specialwidget->window,
-                               specialwidget->style->black_gc,
-                               blockpix, (specialblocks[i]-1)*BLOCKSIZE,
-                               0, BLOCKSIZE*i, 0, BLOCKSIZE, BLOCKSIZE);*/
-              drawpix (specialwidget, (specialblocks[i]-1)*BLOCKSIZE, 0, BLOCKSIZE*i, 0, BLOCKSIZE, BLOCKSIZE);
+            drawpix (specialwidget, (specialblocks[i]-1)*BLOCKSIZE, 0, BLOCKSIZE*i, 0, BLOCKSIZE, BLOCKSIZE);
         }
         else {
-/*            gdk_draw_rectangle (specialwidget->window, specialwidget->style->black_gc,
-                                TRUE, BLOCKSIZE*i, 0,
-                                BLOCKSIZE*(i+1), BLOCKSIZE);*/
-              // black (otherwise it is white)
-              cairo_t *cr = gdk_cairo_create (gtk_widget_get_window(specialwidget));
-              cairo_rectangle (cr, BLOCKSIZE*i, 0, BLOCKSIZE*(i+1), BLOCKSIZE);
-              cairo_fill (cr);
-              cairo_destroy (cr);
+            /* draw black rectangle on backing surface */
+            if (specials_surface) {
+                cairo_t *cr = cairo_create (specials_surface);
+                cairo_set_source_rgb (cr, 0, 0, 0);
+                cairo_rectangle (cr, BLOCKSIZE*i, 0, BLOCKSIZE, BLOCKSIZE);
+                cairo_fill (cr);
+                cairo_destroy (cr);
+                gtk_widget_queue_draw (specialwidget);
+            }
         }
     }
 }
@@ -414,13 +449,14 @@ void fields_drawnextblock (TETRISBLOCK block)
 {
     int x, y, xstart = 4, ystart = 4, xpos, ypos;
     if (block == NULL) block = displayblock;
-    // Draw the black background
-    /*gdk_draw_rectangle (nextpiecewidget->window, nextpiecewidget->style->black_gc,
-                        TRUE, 0, 0, BLOCKSIZE*9/2, BLOCKSIZE*9/2);*/
-    cairo_t *cr = gdk_cairo_create (gtk_widget_get_window(nextpiecewidget));
-    cairo_rectangle (cr, 0, 0, BLOCKSIZE*9/2, BLOCKSIZE*9/2);
-    cairo_paint (cr);
-    cairo_destroy (cr);
+    /* Draw the black background on the backing surface */
+    if (nextpiece_surface) {
+        cairo_t *cr = cairo_create (nextpiece_surface);
+        cairo_set_source_rgb (cr, 0, 0, 0);
+        cairo_paint (cr);
+        cairo_destroy (cr);
+        gtk_widget_queue_draw (nextpiecewidget);
+    }
     for (y = 0; y < 4; y ++)
         for (x = 0; x < 4; x ++)
             if (block[y][x]) {
@@ -430,13 +466,10 @@ void fields_drawnextblock (TETRISBLOCK block)
     for (y = ystart; y < 4; y ++)
         for (x = xstart; x < 4; x ++) {
             if (block[y][x]) {
-/*                gdk_draw_drawable (gtk_widget_get_window(nextpiecewidget),
-                                   gtk_widget_get_style(nextpiecewidget)->black_gc,
-                                   blockpix, (block[y][x]-1)*BLOCKSIZE, 0,
-                                   BLOCKSIZE*(x-xstart)+BLOCKSIZE/4,
-                                   BLOCKSIZE*(y-ystart)+BLOCKSIZE/4,
-                                   BLOCKSIZE, BLOCKSIZE);*/
-                  drawpix (nextpiecewidget, (block[y][x]-1)*BLOCKSIZE, 0, BLOCKSIZE*(x-xstart)+BLOCKSIZE/4, BLOCKSIZE*(y-ystart)+BLOCKSIZE/4, BLOCKSIZE, BLOCKSIZE);
+                drawpix (nextpiecewidget, (block[y][x]-1)*BLOCKSIZE, 0,
+                         BLOCKSIZE*(x-xstart)+BLOCKSIZE/4,
+                         BLOCKSIZE*(y-ystart)+BLOCKSIZE/4,
+                         BLOCKSIZE, BLOCKSIZE);
             }
         }
     memcpy (displayblock, block, 16);
@@ -518,7 +551,7 @@ void fields_gmsginput (gboolean i)
 
 void fields_gmsginputclear (void)
 {
-    gtk_entry_set_text (GTK_ENTRY (gmsginput), "");
+    gtk_editable_set_text (GTK_EDITABLE (gmsginput), "");
     gtk_editable_set_position (GTK_EDITABLE (gmsginput), 0);
 }
 
@@ -564,5 +597,5 @@ void gmsginput_activate (void)
 
 const char *fields_gmsginputtext (void)
 {
-    return gtk_entry_get_text (GTK_ENTRY(gmsginput));
+    return gtk_editable_get_text (GTK_EDITABLE(gmsginput));
 }

@@ -35,177 +35,222 @@
 #include "commands.h"
 #include "dialogs.h"
 
-#include "images/team24.xpm"
-
-#define GTET_STOCK_TEAM24 "gtet-team24"
-
-static const GtkActionEntry entries[] = {
-  {"GameMenu", NULL, N_("_Game"), NULL, NULL, NULL},
-  {"SettingsMenu", NULL, N_("_Settings"), NULL, NULL, NULL},
-  {"HelpMenu", NULL, N_("_Help"), NULL, NULL, NULL},
-
-  {"Connect", GTK_STOCK_CONNECT, N_("_Connect to server..."), "<control>C", N_("Connect to a server"), connect_command},
-  {"Disconnect", GTK_STOCK_DISCONNECT, N_("_Disconnect from server"), "<control>D", N_("Disconnect from the current server"), disconnect_command},
-  {"ChangeTeam", GTET_STOCK_TEAM24, N_("Change _team..."), "<control>T", N_("Change your current team name"), team_command},
-  {"StartGame", GTK_STOCK_MEDIA_PLAY, N_("_Start game"), "<control>N", N_("Start a new game"), start_command},
-  {"PauseGame", GTK_STOCK_MEDIA_PAUSE, N_("_Pause game"), "<control>P", N_("Pause the game"), pause_command},
-  {"EndGame", GTK_STOCK_MEDIA_STOP, N_("_End game"), "<control>S", N_("End the current game"), end_command},
-  /* Detach stuff is not ready, says Ka-shu, so make it configurable at
-   * compile time for now. */
+/* GSimpleAction instances for each command */
+static GSimpleAction *action_connect;
+static GSimpleAction *action_disconnect;
+static GSimpleAction *action_team;
+static GSimpleAction *action_start;
+static GSimpleAction *action_pause;
+static GSimpleAction *action_end;
 #ifdef ENABLE_DETACH
-  {"DetachPage", GTK_STOCK_CUT, N_("Detac_h page..."), "", N_("Detach the current notebook page"), detach_command},
-#endif /* ENABLE_DETACH */
-  {"Exit", GTK_STOCK_QUIT, NULL, "<control>Q", NULL, destroymain},
-  {"Preferences", GTK_STOCK_PREFERENCES, NULL, NULL, NULL, preferences_command},
-  {"About", GTK_STOCK_ABOUT, NULL, NULL, NULL, about_command},
-};
-
-static const char *ui_description =
-"<ui>"
-  "<menubar name='MainMenu'>"
-    "<menu action='GameMenu'>"
-      "<menuitem action='Connect' />"
-      "<menuitem action='Disconnect' />"
-      "<separator />"
-      "<menuitem action='ChangeTeam' />"
-      "<separator />"
-      "<menuitem action='StartGame' />"
-      "<menuitem action='PauseGame' />"
-      "<menuitem action='EndGame' />"
-#ifdef ENABLE_DETACH
-      "<separator />"
-      "<menuitem action='DetachPage' />"
+static GSimpleAction *action_detach;
 #endif
-      "<separator />"
-      "<menuitem action='Exit' />"
-    "</menu>"
-    "<menu action='SettingsMenu'>"
-      "<menuitem action='Preferences' />"
-    "</menu>"
-    "<menu action='HelpMenu'>"
-      "<menuitem action='About' />"
-    "</menu>"
-  "</menubar>"
-  "<toolbar name='MainToolbar'>"
-    "<toolitem action='Connect' />"
-    "<toolitem action='Disconnect' />"
-    "<separator />"
-    "<toolitem action='StartGame' />"
-    "<toolitem action='EndGame' />"
-    "<toolitem action='PauseGame' />"
-    "<separator />"
-    "<toolitem action='ChangeTeam' />"
-#ifdef ENABLE_DETACH
-    "<separator />"
-    "<toolitem action='DetachPage' />"
-#endif
-  "</toolbar>"
-"</ui>";
 
-static const struct {
-  const char *k;
-  const char *v;
-} toolbar_labels[] = {
-  {"Connect", N_("Connect")},
-  {"Disconnect", N_("Disconnect")},
-  {"StartGame", N_("Start game")},
-  {"EndGame", N_("End game")},
-  {"PauseGame", N_("Pause game")},
-  {"ChangeTeam", N_("Change team")},
-#ifdef ENABLE_DETACH
-  {"DetachPage", N_("Detach page")},
-#endif
-};
+/* Toolbar button widget references (for show/hide) */
+static GtkWidget *tb_connect;
+static GtkWidget *tb_disconnect;
+static GtkWidget *tb_start;
+static GtkWidget *tb_end;
+static GtkWidget *tb_pause;
+static GtkWidget *tb_team;
 
-static GtkActionGroup *action_group;
-#define ACTION_SHOW(name) \
-  gtk_action_set_visible (gtk_action_group_get_action (action_group, name), TRUE)
-#define ACTION_HIDE(name) \
-  gtk_action_set_visible (gtk_action_group_get_action (action_group, name), FALSE)
-#define ACTION_ENABLE(name) \
-  gtk_action_set_sensitive (gtk_action_group_get_action (action_group, name), TRUE)
-#define ACTION_DISABLE(name) \
-  gtk_action_set_sensitive (gtk_action_group_get_action (action_group, name), FALSE)
+/* ---- helpers ------------------------------------------------------------ */
 
-static void fixup_toolbar_buttons (GtkUIManager *uim G_GNUC_UNUSED, GtkAction *action, GtkWidget *proxy, gpointer user_data G_GNUC_UNUSED)
+static GSimpleAction *make_action (const char *name,
+                                   GCallback cb,
+                                   gpointer  user_data)
 {
-  gsize i;
+    GSimpleAction *a = g_simple_action_new (name, NULL);
+    if (cb)
+        g_signal_connect (a, "activate", cb, user_data);
+    return a;
+}
 
-  if (GTK_IS_TOOL_BUTTON (proxy)) {
-    for (i = 0; i < G_N_ELEMENTS (toolbar_labels); i++) {
-      if (strcmp (toolbar_labels[i].k, gtk_action_get_name (action)) == 0) {
-        gtk_tool_button_set_label (GTK_TOOL_BUTTON (proxy), _(toolbar_labels[i].v));
-        gtk_tool_item_set_is_important (GTK_TOOL_ITEM (proxy), TRUE);
-      }
+static GtkWidget *make_toolbar_button (const char  *icon_name,
+                                       const char  *label_text,
+                                       GCallback    cb,
+                                       gpointer     user_data)
+{
+    GtkWidget *btn = gtk_button_new ();
+    GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+    GtkWidget *img = gtk_image_new_from_icon_name (icon_name);
+    GtkWidget *lbl = gtk_label_new (label_text);
+
+    gtk_box_append (GTK_BOX(box), img);
+    gtk_box_append (GTK_BOX(box), lbl);
+    gtk_button_set_child (GTK_BUTTON(btn), box);
+    gtk_widget_add_css_class (btn, "flat");
+
+    if (cb)
+        g_signal_connect_swapped (btn, "clicked", cb, user_data);
+
+    return btn;
+}
+
+/* ---- GSimpleAction activate callbacks ----------------------------------- */
+
+static void on_connect    (GSimpleAction *a, GVariant *p, gpointer d) { connect_command (); }
+static void on_disconnect (GSimpleAction *a, GVariant *p, gpointer d) { disconnect_command (); }
+static void on_team       (GSimpleAction *a, GVariant *p, gpointer d) { team_command (); }
+static void on_start      (GSimpleAction *a, GVariant *p, gpointer d) { start_command (); }
+static void on_pause      (GSimpleAction *a, GVariant *p, gpointer d) { pause_command (); }
+static void on_end        (GSimpleAction *a, GVariant *p, gpointer d) { end_command (); }
+#ifdef ENABLE_DETACH
+static void on_detach     (GSimpleAction *a, GVariant *p, gpointer d) { detach_command (); }
+#endif
+static void on_prefs      (GSimpleAction *a, GVariant *p, gpointer d) { preferences_command (); }
+static void on_about      (GSimpleAction *a, GVariant *p, gpointer d) { about_command (); }
+static void on_quit       (GSimpleAction *a, GVariant *p, gpointer d) { destroymain (); }
+
+/* ---- make_menus --------------------------------------------------------- */
+
+void make_menus (GtkWindow *win)
+{
+    GSimpleActionGroup *ag;
+    GMenu *menubar_model, *game_menu, *settings_menu, *help_menu;
+    GtkWidget *menubar;
+    GtkWidget *toolbar;
+    GtkWidget *vbox;
+    GtkWidget *main_widget;
+    GtkWidget *sep;
+
+    /* Create action group and populate actions */
+    ag = g_simple_action_group_new ();
+
+    action_connect    = make_action ("connect",    G_CALLBACK(on_connect),    NULL);
+    action_disconnect = make_action ("disconnect", G_CALLBACK(on_disconnect), NULL);
+    action_team       = make_action ("team",       G_CALLBACK(on_team),       NULL);
+    action_start      = make_action ("start",      G_CALLBACK(on_start),      NULL);
+    action_pause      = make_action ("pause",      G_CALLBACK(on_pause),      NULL);
+    action_end        = make_action ("end",        G_CALLBACK(on_end),        NULL);
+#ifdef ENABLE_DETACH
+    action_detach     = make_action ("detach",     G_CALLBACK(on_detach),     NULL);
+#endif
+    GSimpleAction *action_prefs = make_action ("prefs",  G_CALLBACK(on_prefs), NULL);
+    GSimpleAction *action_about = make_action ("about",  G_CALLBACK(on_about), NULL);
+    GSimpleAction *action_quit  = make_action ("quit",   G_CALLBACK(on_quit),  NULL);
+
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_connect));
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_disconnect));
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_team));
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_start));
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_pause));
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_end));
+#ifdef ENABLE_DETACH
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_detach));
+#endif
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_prefs));
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_about));
+    g_action_map_add_action (G_ACTION_MAP(ag), G_ACTION(action_quit));
+
+    /* Insert as "win" prefix so menu items can use "win.connect" etc. */
+    gtk_widget_insert_action_group (GTK_WIDGET(win), "win", G_ACTION_GROUP(ag));
+    g_object_unref (ag);
+
+    /* Build GMenuModel for the menu bar */
+    {
+        GMenu *s1, *s2, *s3, *s4;
+
+        game_menu = g_menu_new ();
+
+        s1 = g_menu_new ();
+        g_menu_append (s1, N_("_Connect to server..."), "win.connect");
+        g_menu_append (s1, N_("_Disconnect from server"), "win.disconnect");
+        g_menu_append_section (game_menu, NULL, G_MENU_MODEL(s1));
+        g_object_unref (s1);
+
+        s2 = g_menu_new ();
+        g_menu_append (s2, N_("Change _team..."), "win.team");
+        g_menu_append_section (game_menu, NULL, G_MENU_MODEL(s2));
+        g_object_unref (s2);
+
+        s3 = g_menu_new ();
+        g_menu_append (s3, N_("_Start game"), "win.start");
+        g_menu_append (s3, N_("_Pause game"), "win.pause");
+        g_menu_append (s3, N_("_End game"), "win.end");
+#ifdef ENABLE_DETACH
+        g_menu_append (s3, N_("Detac_h page..."), "win.detach");
+#endif
+        g_menu_append_section (game_menu, NULL, G_MENU_MODEL(s3));
+        g_object_unref (s3);
+
+        s4 = g_menu_new ();
+        g_menu_append (s4, N_("_Quit"), "win.quit");
+        g_menu_append_section (game_menu, NULL, G_MENU_MODEL(s4));
+        g_object_unref (s4);
     }
-  }
+
+    settings_menu = g_menu_new ();
+    g_menu_append (settings_menu, N_("_Preferences"), "win.prefs");
+
+    help_menu = g_menu_new ();
+    g_menu_append (help_menu, N_("_About"), "win.about");
+
+    menubar_model = g_menu_new ();
+    g_menu_append_submenu (menubar_model, N_("_Game"),     G_MENU_MODEL(game_menu));
+    g_menu_append_submenu (menubar_model, N_("_Settings"), G_MENU_MODEL(settings_menu));
+    g_menu_append_submenu (menubar_model, N_("_Help"),     G_MENU_MODEL(help_menu));
+
+    g_object_unref (game_menu);
+    g_object_unref (settings_menu);
+    g_object_unref (help_menu);
+
+    /* Create the menu bar widget */
+    menubar = gtk_popover_menu_bar_new_from_model (G_MENU_MODEL(menubar_model));
+    g_object_unref (menubar_model);
+
+    /* Build toolbar */
+    toolbar = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
+    gtk_widget_add_css_class (toolbar, "toolbar");
+
+    tb_connect = make_toolbar_button ("network-connect",     N_("Connect"),    G_CALLBACK(connect_command),    NULL);
+    tb_disconnect = make_toolbar_button ("network-disconnect", N_("Disconnect"), G_CALLBACK(disconnect_command), NULL);
+    sep = gtk_separator_new (GTK_ORIENTATION_VERTICAL);
+    tb_start  = make_toolbar_button ("media-playback-start", N_("Start game"), G_CALLBACK(start_command),      NULL);
+    tb_end    = make_toolbar_button ("media-playback-stop",  N_("End game"),   G_CALLBACK(end_command),        NULL);
+    tb_pause  = make_toolbar_button ("media-playback-pause", N_("Pause game"), G_CALLBACK(pause_command),      NULL);
+    GtkWidget *sep2 = gtk_separator_new (GTK_ORIENTATION_VERTICAL);
+    tb_team   = make_toolbar_button ("system-users",         N_("Change team"),G_CALLBACK(team_command),       NULL);
+
+    gtk_box_append (GTK_BOX(toolbar), tb_connect);
+    gtk_box_append (GTK_BOX(toolbar), tb_disconnect);
+    gtk_box_append (GTK_BOX(toolbar), sep);
+    gtk_box_append (GTK_BOX(toolbar), tb_start);
+    gtk_box_append (GTK_BOX(toolbar), tb_end);
+    gtk_box_append (GTK_BOX(toolbar), tb_pause);
+    gtk_box_append (GTK_BOX(toolbar), sep2);
+    gtk_box_append (GTK_BOX(toolbar), tb_team);
+#ifdef ENABLE_DETACH
+    GtkWidget *sep3 = gtk_separator_new (GTK_ORIENTATION_VERTICAL);
+    GtkWidget *tb_detach = make_toolbar_button ("edit-cut", N_("Detach page"), G_CALLBACK(detach_command), NULL);
+    gtk_box_append (GTK_BOX(toolbar), sep3);
+    gtk_box_append (GTK_BOX(toolbar), tb_detach);
+#endif
+
+    gtk_widget_show (toolbar);
+
+    /* Build the outer vbox: menubar + toolbar + existing main widget */
+    vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+
+    gtk_box_append (GTK_BOX(vbox), menubar);
+    gtk_box_append (GTK_BOX(vbox), toolbar);
+
+    main_widget = gtk_window_get_child (GTK_WINDOW(win));
+    if (main_widget != NULL)
+    {
+        g_object_ref (main_widget);
+        gtk_window_set_child (GTK_WINDOW(win), NULL);
+        gtk_box_append (GTK_BOX(vbox), main_widget);
+        g_object_unref (main_widget);
+        gtk_window_set_child (GTK_WINDOW(win), vbox);
+    }
+
+    /* Initial visibility: hide end/disconnect, show connect/start */
+    gtk_widget_hide (tb_end);
+    gtk_widget_hide (tb_disconnect);
 }
 
-void make_menus (GtkWindow *app)
-{
-  GtkIconFactory *icon_factory;
-  GdkPixbuf *team24_pixbuf;
-  GtkIconSet *team24_icon_set;
-  GError *err = NULL;
-  GtkUIManager *ui_manager;
-  GtkWidget *vbox;
-  GtkAccelGroup *accel_group;
-  GtkWidget *menubar;
-  GtkWidget *toolbar;
-  GtkWidget *main_widget;
-
-  icon_factory = gtk_icon_factory_new ();
-  team24_pixbuf = gdk_pixbuf_new_from_xpm_data ((const char **)team24_xpm);
-  team24_icon_set = gtk_icon_set_new_from_pixbuf (team24_pixbuf);
-  g_object_unref (team24_pixbuf);
-  gtk_icon_factory_add (icon_factory, GTET_STOCK_TEAM24, team24_icon_set);
-  gtk_icon_set_unref (team24_icon_set);
-  gtk_icon_factory_add_default (icon_factory);
-  g_object_unref (icon_factory);
-
-  vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-
-  action_group = gtk_action_group_new ("MenuActions");
-  gtk_action_group_add_actions (action_group, entries, G_N_ELEMENTS (entries), app);
-
-  ui_manager = gtk_ui_manager_new ();
-  gtk_ui_manager_insert_action_group (ui_manager, action_group, 0);
-
-  accel_group = gtk_ui_manager_get_accel_group (ui_manager);
-  gtk_window_add_accel_group (GTK_WINDOW (app), accel_group);
-
-  g_signal_connect (ui_manager, "connect-proxy", G_CALLBACK (fixup_toolbar_buttons), NULL);
-
-  if (!gtk_ui_manager_add_ui_from_string (ui_manager, ui_description, -1, &err)) {
-    g_message ("building menus failed: %s", err->message);
-    g_error_free (err);
-    exit (EXIT_FAILURE);
-  }
-
-  menubar = gtk_ui_manager_get_widget (ui_manager, "/MainMenu");
-  gtk_box_pack_start (GTK_BOX (vbox), menubar, FALSE, FALSE, 0);
-
-  toolbar = gtk_ui_manager_get_widget (ui_manager, "/MainToolbar");
-  gtk_toolbar_set_style (GTK_TOOLBAR (toolbar), GTK_TOOLBAR_BOTH_HORIZ);
-  gtk_box_pack_start (GTK_BOX (vbox), toolbar, FALSE, FALSE, 0);
-
-  gtk_widget_show_all (GTK_WIDGET (vbox));
-
-  main_widget = gtk_bin_get_child (GTK_BIN (app));
-  if (main_widget != NULL)
-  {
-    g_object_ref (main_widget);
-    gtk_container_remove (GTK_CONTAINER (app), main_widget);
-    gtk_box_pack_start (GTK_BOX (vbox), main_widget, TRUE, TRUE, 0);
-    g_object_unref (main_widget);
-    gtk_container_add (GTK_CONTAINER (app), vbox);
-  }
-
-  ACTION_HIDE ("EndGame");
-  ACTION_HIDE ("Disconnect");
-}
-
-/* callbacks */
+/* ---- command callbacks -------------------------------------------------- */
 
 void connect_command (void)
 {
@@ -232,39 +277,39 @@ void detach_command (void)
 void start_command (void)
 {
   char buf[22];
-  
+
   g_snprintf (buf, sizeof(buf), "%i %i", 1, playernum);
   client_outmessage (OUT_STARTGAME, buf);
 }
 
 void show_connect_button (void)
 {
-  ACTION_HIDE ("Disconnect");
-  ACTION_SHOW ("Connect");
+    if (tb_disconnect) gtk_widget_hide (tb_disconnect);
+    if (tb_connect)    gtk_widget_show (tb_connect);
 }
 
 void show_disconnect_button (void)
 {
-  ACTION_HIDE ("Connect");
-  ACTION_SHOW ("Disconnect");
+    if (tb_connect)    gtk_widget_hide (tb_connect);
+    if (tb_disconnect) gtk_widget_show (tb_disconnect);
 }
 
 void show_stop_button (void)
 {
-  ACTION_HIDE ("StartGame");
-  ACTION_SHOW ("EndGame");
+    if (tb_start) gtk_widget_hide (tb_start);
+    if (tb_end)   gtk_widget_show (tb_end);
 }
 
 void show_start_button (void)
 {
-  ACTION_HIDE ("EndGame");
-  ACTION_SHOW ("StartGame");
+    if (tb_end)   gtk_widget_hide (tb_end);
+    if (tb_start) gtk_widget_show (tb_start);
 }
 
 void end_command (void)
 {
   char buf[22];
-  
+
   g_snprintf (buf, sizeof(buf), "%i %i", 0, playernum);
   client_outmessage (OUT_STARTGAME, buf);
 }
@@ -272,7 +317,7 @@ void end_command (void)
 void pause_command (void)
 {
   char buf[22];
-  
+
   g_snprintf (buf, sizeof(buf), "%i %i", paused?0:1, playernum);
   client_outmessage (OUT_PAUSE, buf);
 }
@@ -288,35 +333,50 @@ void preferences_command (void)
 void commands_checkstate ()
 {
     if (connected) {
-        ACTION_DISABLE ("Connect");
-        ACTION_ENABLE ("Disconnect");
+        g_simple_action_set_enabled (action_connect,    FALSE);
+        g_simple_action_set_enabled (action_disconnect, TRUE);
+        if (tb_connect)    gtk_widget_set_sensitive (tb_connect,    FALSE);
+        if (tb_disconnect) gtk_widget_set_sensitive (tb_disconnect, TRUE);
     }
     else {
-        ACTION_ENABLE ("Connect");
-        ACTION_DISABLE ("Disconnect");
+        g_simple_action_set_enabled (action_connect,    TRUE);
+        g_simple_action_set_enabled (action_disconnect, FALSE);
+        if (tb_connect)    gtk_widget_set_sensitive (tb_connect,    TRUE);
+        if (tb_disconnect) gtk_widget_set_sensitive (tb_disconnect, FALSE);
     }
     if (moderator) {
         if (ingame) {
-            ACTION_DISABLE ("StartGame");
-            ACTION_ENABLE ("PauseGame");
-            ACTION_ENABLE ("EndGame");
+            g_simple_action_set_enabled (action_start, FALSE);
+            g_simple_action_set_enabled (action_pause, TRUE);
+            g_simple_action_set_enabled (action_end,   TRUE);
+            if (tb_start) gtk_widget_set_sensitive (tb_start, FALSE);
+            if (tb_pause) gtk_widget_set_sensitive (tb_pause, TRUE);
+            if (tb_end)   gtk_widget_set_sensitive (tb_end,   TRUE);
         }
         else {
-            ACTION_ENABLE ("StartGame");
-            ACTION_DISABLE ("PauseGame");
-            ACTION_DISABLE ("EndGame");
+            g_simple_action_set_enabled (action_start, TRUE);
+            g_simple_action_set_enabled (action_pause, FALSE);
+            g_simple_action_set_enabled (action_end,   FALSE);
+            if (tb_start) gtk_widget_set_sensitive (tb_start, TRUE);
+            if (tb_pause) gtk_widget_set_sensitive (tb_pause, FALSE);
+            if (tb_end)   gtk_widget_set_sensitive (tb_end,   FALSE);
         }
     }
     else {
-        ACTION_DISABLE ("StartGame");
-        ACTION_DISABLE ("PauseGame");
-        ACTION_DISABLE ("EndGame");
+        g_simple_action_set_enabled (action_start, FALSE);
+        g_simple_action_set_enabled (action_pause, FALSE);
+        g_simple_action_set_enabled (action_end,   FALSE);
+        if (tb_start) gtk_widget_set_sensitive (tb_start, FALSE);
+        if (tb_pause) gtk_widget_set_sensitive (tb_pause, FALSE);
+        if (tb_end)   gtk_widget_set_sensitive (tb_end,   FALSE);
     }
     if (ingame || spectating) {
-        ACTION_DISABLE ("ChangeTeam");
+        g_simple_action_set_enabled (action_team, FALSE);
+        if (tb_team) gtk_widget_set_sensitive (tb_team, FALSE);
     }
     else {
-        ACTION_ENABLE ("ChangeTeam");
+        g_simple_action_set_enabled (action_team, TRUE);
+        if (tb_team) gtk_widget_set_sensitive (tb_team, TRUE);
     }
 
     partyline_connectstatus (connected);
@@ -333,8 +393,8 @@ void commands_checkstate ()
 
 void about_command (void)
 {
-    GdkPixbuf *logo;
-  
+    GdkTexture *logo_texture = gdk_texture_new_from_resource ("/apps/gtetrinet/gtetrinet.png");
+
     const char *authors[] = {"Ka-shu Wong <kswong@zip.com.au>",
 			     "James Antill <james@and.org>",
 			     "Jordi Mallach <jordi@sindominio.net>",
@@ -345,21 +405,24 @@ void about_command (void)
     /* Translators: translate as your names & emails */
     const char *translators = _("translator-credits");
 
-    logo = gdk_pixbuf_new_from_file (PIXMAPSDIR "/gtetrinet.png", NULL);
-
     gtk_show_about_dialog (NULL,
-			   "name", APPNAME, 
+			   "program-name", APPNAME,
 			   "version", APPVERSION,
 			   "copyright", "Copyright \xc2\xa9 2004, 2005 Jordi Mallach, Dani Carbonell\nCopyright \xc2\xa9 1999, 2000, 2001, 2002, 2003 Ka-shu Wong",
 			   "comments", _("A Tetrinet client for GNOME.\n"),
 			   "authors", authors,
 			   "documenters", documenters,
 			   "translator-credits", strcmp (translators, "translator-credits") != 0 ? translators : NULL,
-			   "logo", logo,
+			   "logo", logo_texture,
 			   "website", "http://gtetrinet.sf.net",
 			   "website-label", "GTetrinet Home Page",
 			   NULL);
-    
-    if (logo != NULL)
-	    g_object_unref (logo);
+
+    if (logo_texture != NULL)
+	    g_object_unref (logo_texture);
+}
+
+void handle_links (GtkAboutDialog *about G_GNUC_UNUSED, const gchar *link, gpointer data G_GNUC_UNUSED)
+{
+    (void)link; /* unused */
 }

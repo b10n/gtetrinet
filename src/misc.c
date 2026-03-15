@@ -26,22 +26,22 @@
 #include "string.h"
 
 
-/* a left aligned label */
+/* a left aligned label — returns the GtkLabel itself (halign=START) */
 GtkWidget *leftlabel_new (char *str)
 {
-    GtkWidget *label, *align;
+    GtkWidget *label;
     label = gtk_label_new (str);
     gtk_label_set_justify (GTK_LABEL(label), GTK_JUSTIFY_LEFT);
-    gtk_label_set_line_wrap (GTK_LABEL(label), TRUE);
+    gtk_label_set_wrap (GTK_LABEL(label), TRUE);
+    gtk_widget_set_halign (label, GTK_ALIGN_START);
+    gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
     gtk_widget_show (label);
-    align = gtk_alignment_new (0.0, 0.5, 0.0, 0.0);
-    gtk_container_add (GTK_CONTAINER(align), label);
-    return align;
+    return label;
 }
 
-void leftlabel_set (GtkWidget *align, char *str)
+void leftlabel_set (GtkWidget *label, char *str)
 {
-    gtk_label_set_text (GTK_LABEL(gtk_bin_get_child(GTK_BIN(align))), str);
+    gtk_label_set_text (GTK_LABEL(label), str);
 }
 
 /* returns a random number in the range 0 to n-1 --
@@ -65,38 +65,39 @@ void fdreadline (int fd, char *buf)
 
 #define COLORNUM 26
 
+/* Colours stored as GdkRGBA (components 0.0–1.0) */
 static struct gtet_text_tags {
- GdkColor c;
+ GdkRGBA c;
  GtkTextTag *t_c;
 } gtet_text_tags[] =
 {
-                                         /* Code + 0xE000 */
-    {{0, 0, 0, 0}, NULL},                /* ^A black */
-    {{0, 0, 0, 0}, NULL},                /* ^B black */
-    {{0, 0x0000, 0xFFFF, 0xFFFF}, NULL}, /* ^C cyan */
-    {{0, 0x0000, 0x0000, 0x0000}, NULL}, /* ^D black */
-    {{0, 0x0000, 0x0000, 0xFFFF}, NULL}, /* ^E bright blue */
-    {{0, 0x7FFF, 0x7FFF, 0x7FFF}, NULL}, /* ^F grey */
-    {{0, 0, 0, 0}, NULL},                /* ^G black */
-    {{0, 0xFFFF, 0x0000, 0xFFFF}, NULL}, /* ^H magenta */
-    {{0, 0, 0, 0}, NULL},                /* ^I black */
-    {{0, 0, 0, 0}, NULL},                /* ^J black */
-    {{0, 0x7FFF, 0x7FFF, 0x7FFF}, NULL}, /* ^K grey */
-    {{0, 0x0000, 0x7FFF, 0x0000}, NULL}, /* ^L dark green */
-    {{0, 0, 0, 0}, NULL},                /* ^M black */
-    {{0, 0x0000, 0xFFFF, 0x0000}, NULL}, /* ^N bright green */
-    {{0, 0xBFFF, 0xBFFF, 0xBFFF}, NULL}, /* ^O light grey */
-    {{0, 0x7FFF, 0x0000, 0x0000}, NULL}, /* ^P dark red */
-    {{0, 0x0000, 0x0000, 0x7FFF}, NULL}, /* ^Q dark blue */
-    {{0, 0x7FFF, 0x7FFF, 0x0000}, NULL}, /* ^R brown */
-    {{0, 0x7FFF, 0x0000, 0x7FFF}, NULL}, /* ^S purple */
-    {{0, 0xFFFF, 0x0000, 0x0000}, NULL}, /* ^T bright red */
-    {{0, 0xBFFF, 0xBFFF, 0xBFFF}, NULL}, /* ^U light grey */
-    {{0, 0, 0, 0}, NULL},                /* ^V black */
-    {{0, 0x0000, 0x7FFF, 0x7FFF}, NULL}, /* ^W dark cyan */
-    {{0, 0xFFFF, 0xFFFF, 0xFFFF}, NULL}, /* ^X white */
-    {{0, 0xFFFF, 0xFFFF, 0x0000}, NULL}, /* ^Y yellow */
-    {{0, 0, 0, 0}, NULL}                 /* ^Z black */
+                                                   /* Code + 0xE000 */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^A black */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^B black */
+    {{0.0,    1.0,    1.0,    1.0}, NULL},         /* ^C cyan */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^D black */
+    {{0.0,    0.0,    1.0,    1.0}, NULL},         /* ^E bright blue */
+    {{0.498,  0.498,  0.498,  1.0}, NULL},         /* ^F grey */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^G black */
+    {{1.0,    0.0,    1.0,    1.0}, NULL},         /* ^H magenta */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^I black */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^J black */
+    {{0.498,  0.498,  0.498,  1.0}, NULL},         /* ^K grey */
+    {{0.0,    0.498,  0.0,    1.0}, NULL},         /* ^L dark green */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^M black */
+    {{0.0,    1.0,    0.0,    1.0}, NULL},         /* ^N bright green */
+    {{0.749,  0.749,  0.749,  1.0}, NULL},         /* ^O light grey */
+    {{0.498,  0.0,    0.0,    1.0}, NULL},         /* ^P dark red */
+    {{0.0,    0.0,    0.498,  1.0}, NULL},         /* ^Q dark blue */
+    {{0.498,  0.498,  0.0,    1.0}, NULL},         /* ^R brown */
+    {{0.498,  0.0,    0.498,  1.0}, NULL},         /* ^S purple */
+    {{1.0,    0.0,    0.0,    1.0}, NULL},         /* ^T bright red */
+    {{0.749,  0.749,  0.749,  1.0}, NULL},         /* ^U light grey */
+    {{0.0,    0.0,    0.0,    1.0}, NULL},         /* ^V black */
+    {{0.0,    0.498,  0.498,  1.0}, NULL},         /* ^W dark cyan */
+    {{1.0,    1.0,    1.0,    1.0}, NULL},         /* ^X white */
+    {{1.0,    1.0,    0.0,    1.0}, NULL},         /* ^Y yellow */
+    {{0.0,    0.0,    0.0,    1.0}, NULL}          /* ^Z black */
 };
 
 static GtkTextTag *t_bold = NULL;
@@ -111,10 +112,10 @@ void textbox_setup (void)
    * buffer and keep the table for use with new buffers */
     int n;
     GtkTextBuffer *buffer = gtk_text_buffer_new(NULL);
-    
+
     for (n = 0; n < COLORNUM; n ++)
         gtet_text_tags[n].t_c = gtk_text_buffer_create_tag (buffer, NULL,
-                                                            "foreground-gdk",
+                                                            "foreground-rgba",
                                                             &gtet_text_tags[n].c,
                                                             NULL);
 
@@ -140,35 +141,20 @@ void textbox_addtext (GtkTextView *textbox, const char *str)
     gboolean attr_bold = FALSE;
     gboolean attr_italic = FALSE;
     gboolean attr_underline = FALSE;
-    /* GtkAdjustment *textboxadj = GTK_TEXT_VIEW(textbox)->vadjustment; */
     GtkTextIter iter;
     gchar* p;
     gchar* text=g_strdup(str);
 
-                
-    /* is the scroll bar at the bottom ?? */
-    /* if ((textboxadj->value+10)>(textboxadj->upper-textboxadj->lower-textboxadj->page_size))
-       bottom = TRUE;
-       else bottom = FALSE; */
-    /* FIXME: this shouldn't be here ... GtkTextView craps itself if you adjust
-     * constantly ...
-     * plus this function is only used from one place that doesn't call
-     * adjust_bottom always anyway  */
-    
     lastcolor = color = gtet_text_tags[0].t_c;
-    /* gtk_text_freeze (textbox); */
 
     gtk_text_buffer_get_end_iter(gtk_text_view_get_buffer(textbox), &iter);
-    
+
     if (gtk_text_buffer_get_char_count (gtk_text_view_get_buffer(textbox))) /* not first line */
         gtk_text_buffer_insert (gtk_text_view_get_buffer(textbox), &iter, "\n", 1);
 
-    /* For-loop with utf-8 support. - vidar*/
-    /* XXX: Relies on g_utf8_next_char advancing by one byte on an invalid start byte,
-       which is undefined by the documentation of g_utf8_next_char. -stump */
     for(p=text; p[0]; p=g_utf8_next_char(p)) {
         tmp=(guchar)p[0];  /* Only for checking color codes now.*/
-        
+
 	if (tmp == TETRI_TB_RESET) {
 	    lastcolor = color = gtet_text_tags[0].t_c;
             attr_bold = FALSE;
@@ -178,7 +164,7 @@ void textbox_addtext (GtkTextView *textbox, const char *str)
         else if (tmp <= TETRI_TB_END_OFFSET) {
             g_assert(TETRI_TB_END_OFFSET < 32); /* ASCII space */
             g_assert(TETRI_TB_C_END_OFFSET <= TETRI_TB_END_OFFSET);
-          
+
             switch (tmp) {
             case TETRI_TB_BOLD:      attr_bold      = !attr_bold; break;
             case TETRI_TB_ITALIC:    attr_italic    = !attr_italic; break;
@@ -201,11 +187,10 @@ void textbox_addtext (GtkTextView *textbox, const char *str)
         else
         {
           tmp=g_utf8_get_char(p); /* It's not a color code, so get the entire char. */
-          /* gchar *out = g_locale_to_utf8 (&text[i], 1, NULL, NULL, NULL);  */
           gchar out[7]; /* max utf-8 length plus \0 */
           out[g_unichar_to_utf8(tmp,out)]='\0'; /* convert and terminate */
           g_assert(g_utf8_validate(out,-1,NULL));
-          
+
             if (0)
             { /* do nothing */ ; }
             else if (attr_bold && attr_italic && attr_underline)
@@ -231,7 +216,7 @@ void textbox_addtext (GtkTextView *textbox, const char *str)
               if (attr_bold)      t_a = t_bold;
               if (attr_italic)    t_a = t_italic;
               if (attr_underline) t_a = t_underline;
-              
+
               gtk_text_buffer_insert_with_tags (gtk_text_view_get_buffer(textbox), &iter, out, -1,
                                                 t_a, color, NULL);
             }
@@ -240,15 +225,12 @@ void textbox_addtext (GtkTextView *textbox, const char *str)
                                                 color, NULL);
             else
               gtk_text_buffer_insert (gtk_text_view_get_buffer(textbox), &iter, out, -1);
-            
+
         }
-        
+
     next:
         continue;
     }
-    /* scroll to bottom */
-    /* gtk_text_thaw (textbox); */
-    /* if (bottom) adjust_bottom (textboxadj); */
 
     g_free(text);
 }
@@ -264,19 +246,18 @@ static gboolean cb_adjust_bottom(gpointer data)
   GList *scan = adj_list;
 
   data = data; /* to get rid of the warning */
-  
+
   while (scan)
   {
     GtkTextView *tv = scan->data;
     GtkTextIter iter;
 
     gtk_text_buffer_get_end_iter(gtk_text_view_get_buffer(tv), &iter);
-    /* Maybe want... scroll_to_iter(tv, &iter, 0.0, TRUE, 0.0, 1.0); ???? */
     gtk_text_view_scroll_to_iter(tv, &iter, 0.0, FALSE, 0.0, 0.0);
-    
+
     scan = scan->next;
   }
-  
+
   g_list_free(adj_list);
   adj_list = NULL;
   return FALSE;
@@ -288,7 +269,7 @@ void adjust_bottom_text_view (GtkTextView *tv)
   {
     if (!adj_list)
       g_idle_add (cb_adjust_bottom, adj_list);
-    
+
     adj_list = g_list_append(adj_list, tv);
   }
 }
@@ -298,7 +279,7 @@ char *nocolor (char *str)
   static GString *ret = NULL;
   size_t len = strlen(str);
   signed char *scan, *p = NULL;
-  
+
   if (!ret)
     ret = g_string_new("");
 
@@ -312,7 +293,7 @@ char *nocolor (char *str)
   }
   if (scan != p)
     g_string_truncate(ret, len - (scan - p));
-  
+
   return ret->str;
 }
 
@@ -322,17 +303,15 @@ gchar* ensure_utf8(const char* str) {
 
     if(g_utf8_validate(str,-1,NULL)) {
         /* The string is valid utf-8, copy it. */
-        text=g_strdup(str); 
+        text=g_strdup(str);
     } else {
         /* The string isn't valid utf-8, try locale. */
         text=g_locale_to_utf8(str,-1,NULL,NULL,NULL);
         if(!text) { /* The locale didn't work. Use ISO8859-1. */
             text=g_convert(str,-1,"UTF-8","ISO8859-1",NULL,NULL,NULL);
         }
-    } 
+    }
     /* Any random byte sequence is valid iso8859-1, so this won't happen.*/
     g_assert(text!=NULL && g_utf8_validate(text,-1,NULL));
     return text;
 }
-
-

@@ -233,8 +233,8 @@ void tetrinet_inmessage (enum inmsg_type msgtype, char *data)
                                              GTK_MESSAGE_ERROR,
                                              GTK_BUTTONS_OK,
                                              "%s", buf);
-            gtk_dialog_run (GTK_DIALOG(dialog));
-            gtk_widget_destroy (dialog);
+            dialog_run (GTK_DIALOG(dialog));
+            gtk_window_destroy (GTK_WINDOW(dialog));
             g_free (data_utf8);
             show_connect_button ();
         }

@@ -21,8 +21,8 @@
 #include <config.h>
 #endif
 
-#include <gtk/gtk.h>
 #include <sys/types.h>
+#include <glib.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -36,7 +36,16 @@ char soundfiles[S_NUM][1024];
 
 #ifdef HAVE_CANBERRAGTK
 
-#include <canberra-gtk.h>
+#include <canberra.h>
+
+static ca_context *ca_ctx = NULL;
+
+static ca_context *get_ca_context (void)
+{
+    if (!ca_ctx)
+        ca_context_create (&ca_ctx);
+    return ca_ctx;
+}
 
 static char *soundsamples[S_NUM] = {NULL};
 
@@ -48,7 +57,7 @@ void sound_cache (void)
         if (soundsamples[i] != NULL)
             g_free (soundsamples[i]);
         if (soundfiles[i][0]) {
-            ca_context_cache (ca_gtk_context_get (), CA_PROP_MEDIA_FILENAME, soundfiles[i], NULL);
+            ca_context_cache (get_ca_context (), CA_PROP_MEDIA_FILENAME, soundfiles[i], NULL);
             soundsamples[i] = g_strdup (soundfiles[i]);
         } else {
             soundsamples[i] = NULL;
@@ -60,7 +69,7 @@ void sound_playsound (int id)
 {
     if (!soundenable) return;
     if (soundsamples[id] != NULL)
-      ca_context_play (ca_gtk_context_get (), 0,
+      ca_context_play (get_ca_context (), 0,
                          CA_PROP_MEDIA_FILENAME, soundsamples[id],
                          /* If GTK says sounds are disabled, override it. */
                          CA_PROP_CANBERRA_ENABLE, "1",
